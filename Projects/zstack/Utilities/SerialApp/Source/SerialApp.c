@@ -49,11 +49,6 @@
 #define SERIAL_APP_IDLE  6
 #endif
 
-// Loopback Rx bytes to Tx for throughput testing.
-#if !defined( SERIAL_APP_LOOPBACK )
-#define SERIAL_APP_LOOPBACK  FALSE
-#endif
-
 // This is the max byte count per OTA message.
 #if !defined( SERIAL_APP_TX_MAX )
 #define SERIAL_APP_TX_MAX  80
@@ -132,7 +127,7 @@ static void SerialApp_UartInit(void);
 /*********************************************************************
  * @fn      SerialApp_Init
  *
- * @brief   This is called during OSAL tasks' initialization.
+ * @brief   在OSAL任务初始化时调用
  *
  * @param   task_id - the Task ID assigned by OSAL.
  *
@@ -158,7 +153,7 @@ void SerialApp_Init( uint8 task_id )
 /*********************************************************************
  * @fn      SerialApp_UartInit
  * 
- * @brief   Config UART for data communication.
+ * @brief   配置UART协议
 
  * @param   Void
 
@@ -183,7 +178,7 @@ void SerialApp_UartInit( void ) {
 /*********************************************************************
  * @fn      SerialApp_ProcessEvent
  *
- * @brief   Generic Application Task event processor.
+ * @brief   事件处理函数
  *
  * @param   task_id  - The OSAL assigned task ID.
  * @param   events   - Bit map of events to process.
@@ -202,11 +197,11 @@ UINT16 SerialApp_ProcessEvent( uint8 task_id, UINT16 events )
     {
       switch ( MSGpkt->hdr.event )
       {
-      case AF_INCOMING_MSG_CMD:
+      case AF_INCOMING_MSG_CMD: // 入栈消息
         SerialApp_ProcessMSGCmd( MSGpkt );
         break;
         
-      case ZDO_STATE_CHANGE:
+      case ZDO_STATE_CHANGE: // 网络状态改变
         SampleApp_NwkState = (devStates_t)(MSGpkt->hdr.status);
         if ( (SampleApp_NwkState == DEV_ZB_COORD)
             || (SampleApp_NwkState == DEV_ROUTER)
@@ -230,7 +225,7 @@ UINT16 SerialApp_ProcessEvent( uint8 task_id, UINT16 events )
     return ( events ^ SYS_EVENT_MSG );
   }
 
-  if ( events & SERIALAPP_SEND_EVT )
+  if ( events & SERIALAPP_SEND_EVT ) // 发送串口消息
   {
     SerialApp_Send();
     return ( events ^ SERIALAPP_SEND_EVT );
@@ -248,9 +243,7 @@ UINT16 SerialApp_ProcessEvent( uint8 task_id, UINT16 events )
 /*********************************************************************
  * @fn      SerialApp_ProcessMSGCmd
  *
- * @brief   Data message processor callback. This function processes
- *          any incoming data - probably from other devices. Based
- *          on the cluster ID, perform the intended action.
+ * @brief   消息处理回调函数，基于消息簇ID
  *
  * @param   pkt - pointer to the incoming message packet
  *
@@ -336,59 +329,38 @@ void SerialApp_ProcessMSGCmd( afIncomingMSGPacket_t *pkt )
 /*********************************************************************
  * @fn      SerialApp_Send
  *
- * @brief   Send data OTA.
+ * @brief   读取串口Tx，通过Zigbee发送
  *
  * @param   none
  *
  * @return  none
  */
-static void SerialApp_Send(void)
+static void SerialApp_Send(void) 
 {
-#if SERIAL_APP_LOOPBACK
-    if (SerialApp_TxLen < SERIAL_APP_TX_MAX)
+  if (!SerialApp_TxLen && 
+      (SerialApp_TxLen = HalUARTRead(SERIAL_APP_PORT, SerialApp_TxBuf+1, SERIAL_APP_TX_MAX)))
+  {
+    // Pre-pend sequence number to the Tx message.
+    SerialApp_TxBuf[0] = ++SerialApp_TxSeq;
+  }
+
+  if (SerialApp_TxLen)
+  {
+    if (afStatus_SUCCESS != AF_DataRequest(&SerialApp_TxAddr,
+                                            (endPointDesc_t *)&SerialApp_epDesc,
+                                            SERIALAPP_CLUSTERID1,
+                                            SerialApp_TxLen+1, SerialApp_TxBuf,
+                                            &SerialApp_MsgID, 0, AF_DEFAULT_RADIUS))
     {
-        SerialApp_TxLen += HalUARTRead(SERIAL_APP_PORT, SerialApp_TxBuf+SerialApp_TxLen+1,
-                                                      SERIAL_APP_TX_MAX-SerialApp_TxLen);
+      osal_set_event(SerialApp_TaskID, SERIALAPP_SEND_EVT);
     }
-  
-    if (SerialApp_TxLen)
-    {
-      (void)SerialApp_TxAddr;
-      if (HalUARTWrite(SERIAL_APP_PORT, SerialApp_TxBuf+1, SerialApp_TxLen))
-      {
-        SerialApp_TxLen = 0;
-      }
-      else
-      {
-        osal_set_event(SerialApp_TaskID, SERIALAPP_SEND_EVT);
-      }
-    }
-#else
-    if (!SerialApp_TxLen && 
-        (SerialApp_TxLen = HalUARTRead(SERIAL_APP_PORT, SerialApp_TxBuf+1, SERIAL_APP_TX_MAX)))
-    {
-      // Pre-pend sequence number to the Tx message.
-      SerialApp_TxBuf[0] = ++SerialApp_TxSeq;
-    }
-  
-    if (SerialApp_TxLen)
-    {
-      if (afStatus_SUCCESS != AF_DataRequest(&SerialApp_TxAddr,
-                                             (endPointDesc_t *)&SerialApp_epDesc,
-                                              SERIALAPP_CLUSTERID1,
-                                              SerialApp_TxLen+1, SerialApp_TxBuf,
-                                              &SerialApp_MsgID, 0, AF_DEFAULT_RADIUS))
-      {
-        osal_set_event(SerialApp_TaskID, SERIALAPP_SEND_EVT);
-      }
-    }
-#endif
+  }
 }
 
 /*********************************************************************
  * @fn      SerialApp_Resp
  *
- * @brief   Send data OTA.
+ * @brief   收到Zigbee消息后的响应函数
  *
  * @param   none
  *
@@ -409,7 +381,7 @@ static void SerialApp_Resp(void)
 /*********************************************************************
  * @fn      SerialApp_CallBack
  *
- * @brief   Send data OTA.
+ * @brief   UART协议回调函数
  *
  * @param   port - UART port.
  * @param   event - the UART port event flag.
@@ -420,25 +392,25 @@ static void SerialApp_CallBack(uint8 port, uint8 event)
 {
   (void)port;
 
-  if ((event & (HAL_UART_RX_FULL | HAL_UART_RX_ABOUT_FULL | HAL_UART_RX_TIMEOUT)) &&
-#if SERIAL_APP_LOOPBACK
-      (SerialApp_TxLen < SERIAL_APP_TX_MAX))
-#else
-      !SerialApp_TxLen)
-#endif
+  if ( (event & (HAL_UART_RX_FULL | HAL_UART_RX_ABOUT_FULL | HAL_UART_RX_TIMEOUT)) &&
+      !SerialApp_TxLen )
   {
     SerialApp_Send();
   }
 }
 
 /*********************************************************************
-*********************************************************************/
+ * @fn      SerialApp_DeviceConnect
+ *
+ * @brief   发起入网请求
+ *
+ * @return  none
+ */
 void  SerialApp_DeviceConnect()              
 {
 #if ZDO_COORDINATOR
   
 #else
-  
   uint16 nwkAddr;
   uint16 parentNwkAddr;
   char buff[30] = {0};
@@ -470,10 +442,19 @@ void  SerialApp_DeviceConnect()
   {
     // Error occurred in request to send.
   }
-  
 #endif    //ZDO_COORDINATOR
 }
 
+/*********************************************************************
+ * @fn      SerialApp_DeviceConnectRsp
+ *
+ * @brief   处理入网响应消息
+ *
+ * @param   port - UART port.
+ * @param   event - the UART port event flag.
+ *
+ * @return  none
+ */
 void SerialApp_DeviceConnectRsp(uint8 *buf)
 {
 #if ZDO_COORDINATOR
@@ -488,6 +469,16 @@ void SerialApp_DeviceConnectRsp(uint8 *buf)
 #endif
 }
 
+/*********************************************************************
+ * @fn      SerialApp_ConnectReqProcess
+ *
+ * @brief   处理入网请求
+ *
+ * @param   port - UART port.
+ * @param   event - the UART port event flag.
+ *
+ * @return  none
+ */
 void SerialApp_ConnectReqProcess(uint8 *buf)
 {
   uint16 nwkAddr;
