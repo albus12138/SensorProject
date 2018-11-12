@@ -58,3 +58,6 @@ dkms.conf
 *.lst
 *.pbi
 *.pbd
+
+# vscode
+.vscode/*
