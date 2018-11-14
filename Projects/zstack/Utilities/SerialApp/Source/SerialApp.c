@@ -300,6 +300,7 @@ void SerialApp_ProcessMSGCmd( afIncomingMSGPacket_t *pkt )
     break;
 
   // A response to a received serial data block.   // 接到响应消息
+    
   case SERIALAPP_CLUSTERID2:
     if ((pkt->cmd.Data[1] == SerialApp_TxSeq) &&
        ((pkt->cmd.Data[0] == OTA_SUCCESS) || (pkt->cmd.Data[0] == OTA_DUP_MSG)))
@@ -330,6 +331,8 @@ void SerialApp_ProcessMSGCmd( afIncomingMSGPacket_t *pkt )
  * @fn      SerialApp_Send
  *
  * @brief   读取串口Tx，通过Zigbee发送
+ *
+ * 1奇偶校验，2每次发送三组数据（频率+时间+标号+温度）,3发送数据格式
  *
  * @param   none
  *
